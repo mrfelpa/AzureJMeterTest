@@ -1,52 +1,96 @@
+function Show-Header {
+    param (
+        [string]$title
+    )
+    Write-Host "======================" -ForegroundColor Cyan
+    Write-Host $title -ForegroundColor Yellow
+    Write-Host "======================`n" -ForegroundColor Cyan
+}
 
-$subscriptionId = "<subscriptionId>"
+function Get-UserInput {
+    param (
+        [string]$prompt,
+        [string]$validationPattern = ".+"
+    )
+    do {
+        $input = Read-Host -Prompt $prompt
+        if ($input -notmatch $validationPattern) {
+            Write-Host "Invalid input. Please try again." -ForegroundColor Red
+        }
+    } while ($input -notmatch $validationPattern)
+    return $input
+}
+
+function Show-Progress {
+    param (
+        [string]$activity,
+        [int]$percent
+    )
+    Write-Progress -Activity $activity -Status "$activity in progress..." -PercentComplete $percent
+}
+
+Show-Header "Load Test Automation Script"
+
+$subscriptionId = Get-UserInput "Enter your Subscription ID"
 $resourceGroupName = "LoadTestResourceGroup"
 $loadTestName = "LoadTest"
 $location = "East US"
-$jmeterFilePath = "<pathToJMXFile>"
-$storageAccountName = "loadteststorageaccount"
+$jmeterFilePath = Get-UserInput "Enter the path to your JMeter (JMX) file"
+$storageAccountName = Get-UserInput "Enter the name for the storage account (lowercase, 3-24 characters)"
 $containerName = "loadtestcontainer"
 $reportFileName = "LoadTestReport.txt"
 
-Connect-AzAccount
+Show-Progress "Connecting to Azure" 10
+try {
+    Connect-AzAccount
+    Set-AzContext -SubscriptionId $subscriptionId
+} catch {
+    Write-Host "Failed to connect to Azure: $_" -ForegroundColor Red
+    exit
+}
 
-Set-AzContext -SubscriptionId $subscriptionId
-
+Show-Progress "Creating Resource Group" 30
 New-AzResourceGroup -Name $resourceGroupName -Location $location
 
-New-AzResource -ResourceGroupName $resourceGroupName -ResourceName $loadTestName -ResourceType "Microsoft.LoadTestService/loadtests" -ApiVersion "2021-12-01-preview" -Location $location -Properties @{ "JMeterFilePath" = $jmeterFilePath } -Force
+Show-Progress "Creating Load Test" 50
+try {
+    New-AzResource -ResourceGroupName $resourceGroupName -ResourceName $loadTestName -ResourceType "Microsoft.LoadTestService/loadtests" -ApiVersion "2021-12-01-preview" -Location $location -Properties @{ "JMeterFilePath" = $jmeterFilePath } -Force
+} catch {
+    Write-Host "Failed to create load test: $_" -ForegroundColor Red
+    exit
+}
 
 $loadTest = Get-AzResource -ResourceGroupName $resourceGroupName -ResourceName $loadTestName -ResourceType "Microsoft.LoadTestService/loadtests"
 
-# Display the load test details
-Write-Host "Load Test Details:"
+Show-Header "Load Test Details"
 Write-Host "Name: $($loadTest.Name)"
 Write-Host "Resource Group: $($loadTest.ResourceGroupName)"
 Write-Host "Location: $($loadTest.Location)"
-Write-Host "JMeter File Path: $($loadTest.Properties.JMeterFilePath)"
+Write-Host "JMeter File Path: $($loadTest.Properties.JMeterFilePath)`n"
 
-# Create a storage account
-New-AzStorageAccount -ResourceGroupName $resourceGroupName -Name $storageAccountName -Location $location -SkuName Standard_LRS -Kind StorageV2
+Show-Progress "Creating Storage Account" 70
+try {
+    New-AzStorageAccount -ResourceGroupName $resourceGroupName -Name $storageAccountName -Location $location -SkuName Standard_LRS -Kind StorageV2
+} catch {
+    Write-Host "Failed to create storage account: $_" -ForegroundColor Red
+    exit
+}
 
-# Create a blob container
+Show-Progress "Creating Blob Container" 80
 New-AzStorageContainer -Name $containerName -Context (Get-AzStorageAccount -ResourceGroupName $resourceGroupName -Name $storageAccountName).Context
 
-# Upload the load test report to the blob container
+Show-Progress "Uploading Load Test Report" 90
 Set-AzStorageBlobContent -File $reportFileName -Container $containerName -Blob $reportFileName -Context (Get-AzStorageAccount -ResourceGroupName $resourceGroupName -Name $storageAccountName).Context
 
-# Run the load test using the CLI command
+Show-Progress "Running Load Test" 100
 az loadtest run --name $loadTestName --subscription $subscriptionId --storage-account-name $storageAccountName --storage-container-name $containerName --jmx $jmeterFilePath --report $reportFileName
 
-# Get the load test results
 $loadTestResults = az loadtest result show --name $loadTestName --subscription $subscriptionId --output json
 
-# Save the load test results to a local file
 $loadTestResults | ConvertTo-Json | Out-File $reportFileName
 
-# Delete the load test resource
 Remove-AzResource -ResourceGroupName $resourceGroupName -ResourceName $loadTestName -ResourceType "Microsoft.LoadTestService/loadtests" -ApiVersion "2021-12-01-preview" -Force
 
-# Delete the resource group
 Remove-AzResourceGroup -Name $resourceGroupName -Force
 
-Write-Host "Load test completed and results saved to $reportFileName"
+Write-Host "Load test completed and results saved to $reportFileName" -ForegroundColor Green
